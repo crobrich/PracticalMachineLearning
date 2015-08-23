@@ -1,0 +1,212 @@
+---
+title: "Project for Coursera Practical Machine Learning Course: Activity (Classe) Prediction Using Weight Lifting Data"
+author: "CRR" 
+date: "August 22, 2015" 
+output: html_document
+---
+## Background/Project Goal
+Using devices such as Jawbone Up, Nike FuelBand, and Fitbit it is now possible to collect a large amount of data about personal activity relatively inexpensively. These type of devices are part of the quantified self movement - a group of enthusiasts who take measurements about themselves regularly to improve their health, to find patterns in their behavior, or because they are tech geeks. One thing that people regularly do is quantify how much of a particular activity they do, but they rarely quantify how well they do it. In this project, the goal is to predict activity using data from accelerometers on the belt, forearm, arm, and dumbell of 6 participants. They were asked to perform one set of 10 repetitions of the Unilateral Dumbbell Biceps Curl in five different fashions: correctly (classe= A), throwing the elbows to the front (classe= B), lifting the dumbbell only halfway (classe= C), lowering the dumbbell only halfway (classe= D) and throwing the hips to the front (classe= E). More information is available from the website: http://groupware.les.inf.puc-rio.br/har (see the section on the Weight Lifting Exercise Dataset). 
+
+
+## Data 
+The training data (used to generate training and testing datasets, see below) for this project are available here: 
+https://d396qusza40orc.cloudfront.net/predmachlearn/pml-training.csv
+
+The test data (perhaps more correctly designated as the validation data, see below) are available here: 
+https://d396qusza40orc.cloudfront.net/predmachlearn/pml-testing.csv
+
+The data for this project come from this source: http://groupware.les.inf.puc-rio.br/har 
+
+
+##Model Development and Testing
+The procedure used may be summarized in the following steps: (1) loading data; (2) cleaning data; (3) pre-processing of data; (4) generating models using training data with cross validation; (5) predictions using testing data; (6) determining accuracy/out-sample error; and (7) validating the best model. Details will be given below in text and in commentary in code chunk sections.
+
+###Loading Data and Cleaning Data
+Data was loaded from the training csv file provided. This raw data had been examined offline in spreadsheet form where 52 predictors plus the outcome (classe) were selected. Basically, predictors with incomplete data were omitted - data4 represents the "cleaned" dataset. See the code chunk that follows.
+
+```{r}
+#Project for Coursera Practical Machine Learning Class - Weight Lifting Data
+
+#Using caret package 
+library(caret)
+
+#Loading Data
+data1<-read.csv("pml-training.csv")
+
+#Raw data examined offline and 52 predictors selected plus outcome labeled "classe"
+#This effectively creates the "cleaned" dataset
+roll<-grep("^roll",(names(data1)))
+pitch<-grep("^pitch",(names(data1)))
+yaw<-grep("^yaw",(names(data1)))
+total<-grep("^total",(names(data1)))
+gyros<-grep("^gyros",(names(data1)))
+accel<-grep("^accel",(names(data1)))
+magnet<-grep("^magnet",(names(data1)))
+classe<-grep("^classe",(names(data1)))
+data2<-c(roll,pitch,yaw,total,gyros,accel,magnet,classe)
+data3<-sort(data2)
+
+#The "cleaned" dataset
+data4<-data1[,data3]
+```
+
+###Pre-processing of Data
+The cleaned data were then pre-processed by removing highly correlated predictors - the cutoff being correlation of 0.5. This reduced the number of predictors from 52 to 21 which makes the modeling much faster and the resulting models simpler and eaiser to handle.
+
+Next, predictors for modeling were selected from those remaining using the rfe function. This function estimates model accuracy depending on the number of variables/predictors used as it successively eliminates variables/predictors from lowest to highest importance. It was determined that using the 15 most important predictors was best - this reduction from 21 also reduces time required to generate models. A figure is provided illustrating accuracy versus number of predictors. Note that when rounded that the accuracy for 15 variables is the same as for 17 (which has the highest accuracy), and 15 is the smallest number of variables where this is true, so only 15 variables were used.
+
+The dataset was adjusted accordingly - the result is data7. See the code chunk that follows.
+
+```{r}
+#Pre-processing the data
+#Finding and removing highly correlated predictors
+correlationMatrix <- cor(data4[,1:52])
+highlyCorrelated <- findCorrelation(correlationMatrix, cutoff=0.5)
+hc<-sort(highlyCorrelated)
+nhc<-c(1:53)
+nhc<-nhc[-hc]
+data5<-data4[,nhc]
+
+#Generating small training set for predictor selection (after removal of correlated predictors)
+set.seed(1)
+intrain<-createDataPartition(y=data5$classe,p=0.05,list=FALSE)
+training<-data5[intrain,]
+testing<-data5[-intrain,]
+dim(training)
+
+#Predictor selection
+set.seed(7)
+library(mlbench)
+library(randomForest)
+control <- rfeControl(functions=rfFuncs, method="cv", number=3)
+results <- rfe(training[,1:21], training[,22], sizes=c(1:21), rfeControl=control)
+print(results)
+predictors(results)
+plot(results, type=c("g", "o"), main ="RFE: Predictor Selection for Model",  xlab="Number of Predictors (after correlated predictors removed)")
+
+#Removing "non-selected" predictors from dataset
+data7<-data5[,predictors(results)[1:15]]
+data7$classe<-data5$classe
+```
+
+### Generating Models Using Training Data with Cross Validation
+The adjusted dataset (data7) was then partitioned into a training dataset for modeling and a testing dataset. Random Forest (RF) and GBM Boost modeling were used - these tend to give the best results for classification situations as in this project.
+
+The Random Forest modeling function took a considerable amount to time to run even with predictor reduction and limiting cross validation. It was found that a training set of only 25% of the dataset would give an excellent model (about 94% accuracy in predicting using testing data and 19/20 correct predictions in the validaton step). Increasing to using 50% of the dataset took very long to run and made only a small improvement (about 97% accuracy on testing data and 20/20 in validation); to save time in preparing this report, only the model using 25% of the dataset as training will be presented in the code chunks below - a change to p=0.5 is all that is needed in the second code line in the chunk that follows to get the slightly better model.
+
+The GBM Boost modeling function ran much faster than the one for Random Forest. The same dataset was used, but the training dataset partition was a more usual 70%. The GBM model did not perform as well as the Random Forest model, so the latter was chosen for the validation step.
+
+In both modeling efforts, cross validation was used: K-fold without repeat with k=3. Using repeated cross validation and/or higher k's did not seem to give a big effect and slowed the modeling functions down considerably when tested - these latter efforts are not shown in the chunks below.
+
+See the next code chunk below for details.
+
+### Predictions Using Testing Data
+The testing data from the partition of data7 (this is not the test data used for the validation discussed below) was used to predict activity (classe) using the models generated.
+
+See the next code chunk that follows for details.
+
+### Determining Accuracy/Out-Sample Error
+Please note that here, fraction error=1-fraction accuracy. Errors determined from checking a model against training data used to generate it are really in-sample errors, though some might say that if cross validation was used then this is an "estimated" out-sample error. A better accuracy/out-sample error value is that determined when checking the model against testing data (the more representative the testing data, the better then error estimate, of course); this is not the test data used for the validation discussed below, but the testing data from partitioned data7. The testing data (from data7) is not used in generating the models, nor is the test data used for validation. Accuracy and out-sample error based on the validation are given in the section on validation; since these are based on fewer cases, they are probably not as good as that based on the testing data from data7.
+
+Relevant values are reported below and figures are given for illustration of these. The figures showing out-sample error are based on testing data (from data7, not validation data); the red line on these figures represents overall out-sample error for all activities based on this same data.
+
+See the code chunk that follows for details.
+
+```{r}
+#Generating datasets for Random Forest modeling
+set.seed(2)
+intrain<-createDataPartition(y=data7$classe,p=0.25,list=FALSE)
+training<-data7[intrain,]
+testing<-data7[-intrain,] 
+
+#Random Forest Modeling and Prediction Testing
+cntrl<-trainControl(method="cv", number=3)
+set.seed(8)
+modfit2<-train(classe~.,method="rf",data=training, prox=TRUE,trControl=cntrl)
+modfit2
+modfit2$finalModel
+pred<-predict(modfit2,newdata=testing)
+table(pred,testing$classe)
+confusionMatrix(pred,testing$classe)
+
+#Generating points and Plotting of Random Forest model performance
+tf<-as.data.frame(table(pred,testing$classe))
+aa<-1-(tf[1,3]/sum(tf[1:5,3]))
+bb<-1-(tf[7,3]/sum(tf[6:10,3]))
+cc<-1-(tf[13,3]/sum(tf[11:15,3]))
+dd<-1-(tf[19,3]/sum(tf[16:20,3]))
+ee<-1-(tf[25,3]/sum(tf[21:25,3]))
+ov<-1-(sum(pred==testing$classe)/nrow(testing))
+
+print("Random Forest Model: Fraction Out-Sample Error for Testing Data Predictions =")
+ov
+
+tfx<-vector(mode="character", length=5)
+tfx<-tf[1:5,1]
+tfy<-c(aa,bb,cc,dd,ee)
+plot(tfy, type="o", col="blue", xaxt="n",main="RF Model: Testing Dataset Predictions", ylab="Fraction Out-Sample Error",xlab="Actual Activity (Classe)")
+abline(h=ov, col="red",lty=2)
+axis(1, at=1:5, lab=(tfx))
+
+#Generating datasets for GBM Boost modeling
+set.seed(3)
+intrain<-createDataPartition(y=data7$classe,p=0.70,list=FALSE)
+training<-data7[intrain,]
+testing<-data7[-intrain,] 
+
+#GBM Boost Modeling and Prediction Testing
+cntrl<-trainControl(method="cv", number=3)
+set.seed(9)
+modfit3<-train(classe~.,method="gbm",data=training,verbose=FALSE,trControl=cntrl)
+modfit3
+modfit3$finalModel
+pred<-predict(modfit3,newdata=testing)
+table(pred,testing$classe)
+confusionMatrix(pred,testing$classe)
+
+#Generating points and Plotting of GBM Boost model performance
+tf<-as.data.frame(table(pred,testing$classe))
+aa<-1-(tf[1,3]/sum(tf[1:5,3]))
+bb<-1-(tf[7,3]/sum(tf[6:10,3]))
+cc<-1-(tf[13,3]/sum(tf[11:15,3]))
+dd<-1-(tf[19,3]/sum(tf[16:20,3]))
+ee<-1-(tf[25,3]/sum(tf[21:25,3]))
+ov<-1-(sum(pred==testing$classe)/nrow(testing))
+
+print("GBM Boost Model: Fraction Out-Sample Error for Testing Data Predictions=")
+ov
+
+tfx<-vector(mode="character", length=5)
+tfx<-tf[1:5,1]
+tfy<-c(aa,bb,cc,dd,ee)
+plot(tfy, type="o", col="blue", xaxt="n",main="GBM Boost Model: Testing Dataset Predictions", ylab="Fraction Out-Sample Error",xlab="Actual Activity (Classe)")
+abline(h=ov, col="red",lty=2)
+axis(1, at=1:5, lab=(tfx))
+```
+
+### Validating the Best Model
+From the accuracy and out-sample errors, it was determined that the Random Forest model was better than the GBM Boost model. The Random Forest model (RF) was checked using the test data provided for validation (20 cases) - this is not the testing data generated from the partition of data7.
+
+As noted above, there were actually 2 RF models tested in the validation step. One got 19/20 correct and the other 20/20. This would be a 0.95 fraction accuracy/ 0.05 fraction out-sample error and 1.0 fraction accuracy/ 0.0 fraction out-sample error, respectively. Only the former is actually detailed in this report, as explained above.
+
+See code chunk that follows directly. Validation itself was through the Coursera course website, so this part of the code won't be run here.
+
+```{r}
+#Generating Files for Model Validation - code commented out since not needed for report
+
+#data100<-read.csv("pml-testing.csv")
+#answers<-predict(modfit2,newdata=data100)
+#answers
+#  pml_write_files = function(x){
+#    n = length(x)
+#    for(i in 1:n){
+#      filename = paste0("problem_id_",i,".txt")
+#      write.table(x[i],file=filename,quote=FALSE,row.names=FALSE,col.names=FALSE)
+#    }
+# }
+#  pml_write_files(answers) 
+
+```
+
+##Conclusions
+The Random Forest modeling resulted in a model with very high accuracy/low out-sample error, even though short cuts were taken to avoid lengthy computer processing time.
