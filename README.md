@@ -1,2 +1,5 @@
-# ProjectPMLCoursera
-Project for Coursera PML Class
+#Coursera Practical Machine Learning Project
+
+full results at
+http://crobrich.github.io/PracticalMachineLearning/projectPML.html
+
